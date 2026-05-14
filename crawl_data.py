@@ -3,138 +3,845 @@ from bs4 import BeautifulSoup
 import pandas as pd
 import time
 import random
-import json
+import hashlib
+import os
+import ast
+
+from collections import Counter
+from urllib.parse import urlparse
 
 # =========================================================
-# 1. CẤU HÌNH BỘ TỪ ĐIỂN NHÃN (TOPIC MAPPING) MỞ RỘNG
+# CONFIG
 # =========================================================
-TOPIC_MAPPING = {
-    "Chính trị - Pháp luật": ["luật", "thể chế", "nghị quyết", "quốc hội", "chính phủ", "pháp lý", "thẩm quyền", "pháp chế", "tòa án", "vi phạm"],
-    "Kinh tế - Đầu tư": ["doanh nghiệp", "tài chính", "vốn", "tài khóa", "đầu tư", "kinh doanh", "thị trường", "ngân hàng", "giá vàng", "bất động sản"],
-    "Môi trường - Sinh thái": ["chim", "động vật", "quý hiếm", "sách đỏ", "kiểm lâm", "thiên nhiên", "môi trường", "ô nhiễm", "biến đổi khí hậu"],
-    "Khoa học - Công nghệ": ["khoa học", "công nghệ", "thử nghiệm", "dữ liệu", "số hóa", "ai", "trí tuệ nhân tạo", "phần mềm", "chip", "bán dẫn"],
-    "Y tế - Sức khỏe": ["bệnh viện", "bác sĩ", "y tế", "sức khỏe", "vắc xin", "dịch bệnh", "điều trị", "thuốc", "dược phẩm"],
-    "Giáo dục - Đào tạo": ["trường học", "sinh viên", "giáo viên", "đào tạo", "tuyển sinh", "học phí", "đại học", "thi cử", "điểm thi"],
-    "Thể thao": [
-        "bóng đá", "v-league", "ngoại hạng anh", "tennis", "quần vợt", "nadal", "djokovic", 
-        "bóng rổ", "nba", "cầu lông", "bóng chuyền", "võ thuật", "mma", "boxing", 
-        "điền kinh", "marathon", "bơi lội", "huy chương", "giải đấu", "olympic"
-    ],
-    "Văn hóa - Giải trí": ["nghệ sĩ", "ca sĩ", "diễn viên", "phim", "âm nhạc", "showbiz", "sự kiện", "triển lãm", "cuộc thi"],
-    "Giao thông - Xe": ["xe máy", "ô tô", "vinfast", "giao thông", "đường bộ", "cao tốc", "hàng không", "xe điện"],
-    "Du lịch - Đời sống": ["du lịch", "điểm đến", "khách sạn", "ẩm thực", "gia đình", "con cái", "kết hôn", "hôn nhân"]
+
+DATASET_FILE = "Data.csv"
+
+JSON_FILE = "Data.json"
+
+TARGET_PER_LABEL = 2000
+
+headers = {
+    "User-Agent": (
+        "Mozilla/5.0 "
+        "(Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 "
+        "(KHTML, like Gecko) "
+        "Chrome/121 Safari/537.36"
+    )
 }
 
 # =========================================================
-# 2. DANH SÁCH CHUYÊN MỤC CÀO ĐẦY ĐỦ
+# CHỈ CRAWL NHỮNG LABEL THIẾU
 # =========================================================
+
 categories = {
-    "Thời sự": {"url": "https://vnexpress.net/thoi-su", "num_pages": 50},
-    "Thế giới": {"url": "https://vnexpress.net/the-giol", "num_pages": 50},
-    "Kinh tế": {"url": "https://vnexpress.net/kinh-doanh", "num_pages": 50},
-    "Thể thao": {"url": "https://vnexpress.net/the-thao", "num_pages": 50},
-    "Giải trí": {"url": "https://vnexpress.net/giai-tri", "num_pages": 50},
-    "Pháp luật": {"url": "https://vnexpress.net/phap-luat", "num_pages": 50},
-    "Giáo dục": {"url": "https://vnexpress.net/giao-duc", "num_pages": 50},
-    "Sức khỏe": {"url": "https://vnexpress.net/suc-khoe", "num_pages": 50},
-    "Đời sống": {"url": "https://vnexpress.net/gia-dinh", "num_pages": 50},
-    "Du lịch": {"url": "https://vnexpress.net/du-lich", "num_pages": 50},
-    "Khoa học": {"url": "https://vnexpress.net/khoa-hoc", "num_pages": 50},
-    "Số hóa": {"url": "https://vnexpress.net/so-hoa", "num_pages": 50},
-    "Xe": {"url": "https://vnexpress.net/oto-xe-may", "num_pages": 50}
+
+    # =========================================
+    # THẾ GIỚI
+    # =========================================
+
+    "Thế giới": [
+
+        "https://vnexpress.net/the-gioi",
+
+        "https://tuoitre.vn/the-gioi.htm",
+
+        "https://dantri.com.vn/the-gioi.htm",
+
+        "https://thanhnien.vn/the-gioi.htm"
+    ],
+
+    # =========================================
+    # XÃ HỘI
+    # =========================================
+
+    "Xã hội": [
+
+        "https://dantri.com.vn/xa-hoi.htm",
+
+        "https://tuoitre.vn/thoi-su.htm",
+
+        "https://thanhnien.vn/thoi-su.htm"
+    ],
+
+    # =========================================
+    # NHÀ ĐẤT
+    # =========================================
+
+    "Nhà đất": [
+
+        "https://vnexpress.net/bat-dong-san",
+
+        "https://dantri.com.vn/bat-dong-san.htm"
+    ],
+
+    # =========================================
+    # DU LỊCH
+    # =========================================
+
+    "Du lịch": [
+
+        "https://vnexpress.net/du-lich",
+
+        "https://tuoitre.vn/du-lich.htm",
+
+        "https://thanhnien.vn/du-lich.htm"
+    ],
+
+    # =========================================
+    # SỨC KHỎE
+    # =========================================
+
+    "Sức khỏe": [
+
+        "https://vnexpress.net/suc-khoe",
+
+        "https://dantri.com.vn/suc-khoe.htm",
+
+        "https://thanhnien.vn/suc-khoe.htm"
+    ],
+
+    # =========================================
+    # GIÁO DỤC
+    # =========================================
+
+    "Giáo dục": [
+
+        "https://vnexpress.net/giao-duc",
+
+        "https://tuoitre.vn/giao-duc.htm",
+
+        "https://dantri.com.vn/giao-duc.htm"
+    ],
+
+    # =========================================
+    # THỜI SỰ
+    # =========================================
+
+    "Thời sự": [
+
+        "https://vnexpress.net/thoi-su",
+
+        "https://tuoitre.vn/thoi-su.htm",
+
+        "https://thanhnien.vn/thoi-su.htm"
+    ]
 }
 
-headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"}
-all_data = []
+# =========================================================
+# MEMORY
+# =========================================================
+
 visited_urls = set()
 
+visited_hashes = set()
+
+existing_label_counts = Counter()
+
+all_data = []
+
 # =========================================================
-# 3. LOGIC CÀO VÀ XỬ LÝ NHÃN DẠNG LIST
+# LOAD DATASET CŨ
 # =========================================================
 
-def get_article_links(cat_name, cat_url, pages):
+if os.path.exists(DATASET_FILE):
+
+    old_df = pd.read_csv(DATASET_FILE)
+
+    print(f"Đã load dataset cũ: {len(old_df)} bài")
+
+    # URL
+    if "url" in old_df.columns:
+
+        visited_urls.update(
+            old_df["url"].dropna().tolist()
+        )
+
+    # HASH
+    if "text_hash" in old_df.columns:
+
+        visited_hashes.update(
+            old_df["text_hash"].dropna().tolist()
+        )
+
+    # LABEL COUNT
+    if "labels" in old_df.columns:
+
+        for labels in old_df["labels"]:
+
+            try:
+
+                labels = ast.literal_eval(labels)
+
+                existing_label_counts.update(labels)
+
+            except:
+                pass
+
+print("\nPHÂN PHỐI LABEL HIỆN TẠI:\n")
+
+for label, count in existing_label_counts.items():
+
+    print(f"{label}: {count}")
+
+# =========================================================
+# HASH
+# =========================================================
+
+def create_hash(text):
+
+    return hashlib.md5(
+        text.encode("utf-8")
+    ).hexdigest()
+
+# =========================================================
+# GET LINKS VNEXPRESS
+# =========================================================
+
+def get_links_vnexpress(url, pages=30):
+
     links = []
+
     for i in range(1, pages + 1):
-        page_url = f"{cat_url}-p{i}"
-        print(f"--- Đang quét link: {cat_name} (Trang {i}) ---")
+
+        page_url = f"{url}-p{i}"
+
         try:
-            res = requests.get(page_url, headers=headers, timeout=10)
-            soup = BeautifulSoup(res.text, "html.parser")
-            items = soup.find_all(['h2', 'h3'], class_=['title-news', 'title_news'])
+
+            print(f"VNEXPRESS: {page_url}")
+
+            res = requests.get(
+                page_url,
+                headers=headers,
+                timeout=10
+            )
+
+            soup = BeautifulSoup(
+                res.text,
+                "html.parser"
+            )
+
+            items = soup.find_all(
+                ['h2', 'h3'],
+                class_=['title-news', 'title_news']
+            )
+
             for item in items:
+
                 a_tag = item.find('a')
-                if a_tag and 'href' in a_tag.attrs:
-                    link = a_tag['href']
-                    if link.endswith('.html') and link not in visited_urls:
-                        links.append(link)
-                        visited_urls.add(link)
-            time.sleep(random.uniform(0.5, 1.0))
-        except: continue
+
+                if not a_tag:
+                    continue
+
+                link = a_tag.get('href')
+
+                if not link:
+                    continue
+
+                if not link.endswith(".html"):
+                    continue
+
+                if link in visited_urls:
+                    continue
+
+                visited_urls.add(link)
+
+                links.append(link)
+
+            time.sleep(
+                random.uniform(0.5, 1.0)
+            )
+
+        except Exception as e:
+
+            print(e)
+
     return links
 
-def crawl_and_label_article(url, default_label):
+# =========================================================
+# GET LINKS DÂN TRÍ
+# =========================================================
+
+def get_links_dantri(url, pages=30):
+
+    links = []
+
+    for i in range(1, pages + 1):
+
+        page_url = f"{url}?page={i}"
+
+        try:
+
+            print(f"DANTRI: {page_url}")
+
+            res = requests.get(
+                page_url,
+                headers=headers,
+                timeout=10
+            )
+
+            soup = BeautifulSoup(
+                res.text,
+                "html.parser"
+            )
+
+            articles = soup.find_all("h3")
+
+            for item in articles:
+
+                a_tag = item.find("a")
+
+                if not a_tag:
+                    continue
+
+                link = a_tag.get("href")
+
+                if not link:
+                    continue
+
+                if ".htm" not in link:
+                    continue
+
+                if not link.startswith("http"):
+
+                    link = (
+                        "https://dantri.com.vn"
+                        + link
+                    )
+
+                if link in visited_urls:
+                    continue
+
+                visited_urls.add(link)
+
+                links.append(link)
+
+            time.sleep(
+                random.uniform(0.5, 1.0)
+            )
+
+        except Exception as e:
+
+            print(e)
+
+    return links
+
+# =========================================================
+# GET LINKS TUỔI TRẺ
+# =========================================================
+
+def get_links_tuoitre(url, pages=30):
+
+    links = []
+
+    for i in range(1, pages + 1):
+
+        page_url = f"{url}/trang-{i}.htm"
+
+        try:
+
+            print(f"TUOITRE: {page_url}")
+
+            res = requests.get(
+                page_url,
+                headers=headers,
+                timeout=10
+            )
+
+            soup = BeautifulSoup(
+                res.text,
+                "html.parser"
+            )
+
+            articles = soup.find_all("h3")
+
+            for item in articles:
+
+                a_tag = item.find("a")
+
+                if not a_tag:
+                    continue
+
+                link = a_tag.get("href")
+
+                if not link:
+                    continue
+
+                if ".htm" not in link:
+                    continue
+
+                if not link.startswith("http"):
+
+                    link = (
+                        "https://tuoitre.vn"
+                        + link
+                    )
+
+                if link in visited_urls:
+                    continue
+
+                visited_urls.add(link)
+
+                links.append(link)
+
+            time.sleep(
+                random.uniform(0.5, 1.0)
+            )
+
+        except Exception as e:
+
+            print(e)
+
+    return links
+
+# =========================================================
+# GET LINKS THANH NIÊN
+# =========================================================
+
+def get_links_thanhnien(url, pages=30):
+
+    links = []
+
+    for i in range(1, pages + 1):
+
+        page_url = f"{url}?trang={i}"
+
+        try:
+
+            print(f"THANHNIEN: {page_url}")
+
+            res = requests.get(
+                page_url,
+                headers=headers,
+                timeout=10
+            )
+
+            soup = BeautifulSoup(
+                res.text,
+                "html.parser"
+            )
+
+            articles = soup.find_all("h3")
+
+            for item in articles:
+
+                a_tag = item.find("a")
+
+                if not a_tag:
+                    continue
+
+                link = a_tag.get("href")
+
+                if not link:
+                    continue
+
+                if ".htm" not in link:
+                    continue
+
+                if not link.startswith("http"):
+
+                    link = (
+                        "https://thanhnien.vn"
+                        + link
+                    )
+
+                if link in visited_urls:
+                    continue
+
+                visited_urls.add(link)
+
+                links.append(link)
+
+            time.sleep(
+                random.uniform(0.5, 1.0)
+            )
+
+        except Exception as e:
+
+            print(e)
+
+    return links
+
+# =========================================================
+# PARSER VNEXPRESS
+# =========================================================
+
+def parse_vnexpress(soup):
+
+    title_tag = soup.find(
+        "h1",
+        class_="title-detail"
+    )
+
+    title = (
+        title_tag.get_text(strip=True)
+        if title_tag else ""
+    )
+
+    paragraphs = soup.find_all(
+        "p",
+        class_="Normal"
+    )
+
+    content = " ".join([
+        p.get_text(strip=True)
+        for p in paragraphs
+    ])
+
+    return title, content
+
+# =========================================================
+# PARSER DÂN TRÍ
+# =========================================================
+
+def parse_dantri(soup):
+
+    title_tag = soup.find("h1")
+
+    title = (
+        title_tag.get_text(strip=True)
+        if title_tag else ""
+    )
+
+    content_div = soup.find(
+        "div",
+        class_="singular-content"
+    )
+
+    if content_div:
+
+        paragraphs = content_div.find_all("p")
+
+        content = " ".join([
+            p.get_text(strip=True)
+            for p in paragraphs
+        ])
+
+    else:
+
+        content = ""
+
+    return title, content
+
+# =========================================================
+# PARSER TUỔI TRẺ
+# =========================================================
+
+def parse_tuoitre(soup):
+
+    title_tag = soup.find("h1")
+
+    title = (
+        title_tag.get_text(strip=True)
+        if title_tag else ""
+    )
+
+    content_div = soup.find(
+        "div",
+        class_="detail-content"
+    )
+
+    if content_div:
+
+        paragraphs = content_div.find_all("p")
+
+        content = " ".join([
+            p.get_text(strip=True)
+            for p in paragraphs
+        ])
+
+    else:
+
+        content = ""
+
+    return title, content
+
+# =========================================================
+# PARSER THANH NIÊN
+# =========================================================
+
+def parse_thanhnien(soup):
+
+    title_tag = soup.find("h1")
+
+    title = (
+        title_tag.get_text(strip=True)
+        if title_tag else ""
+    )
+
+    content_div = soup.find(
+        "div",
+        class_="detail__cmain"
+    )
+
+    if content_div:
+
+        paragraphs = content_div.find_all("p")
+
+        content = " ".join([
+            p.get_text(strip=True)
+            for p in paragraphs
+        ])
+
+    else:
+
+        content = ""
+
+    return title, content
+
+# =========================================================
+# PARSER MAP
+# =========================================================
+
+SITE_PARSERS = {
+
+    "vnexpress.net": parse_vnexpress,
+
+    "dantri.com.vn": parse_dantri,
+
+    "tuoitre.vn": parse_tuoitre,
+
+    "thanhnien.vn": parse_thanhnien
+}
+
+# =========================================================
+# CRAWL ARTICLE
+# =========================================================
+
+def crawl_article(url, label):
+
     try:
-        res = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(res.text, "html.parser")
-        
-        title_tag = soup.find("h1", class_="title-detail")
-        title = title_tag.get_text(strip=True) if title_tag else ""
-        
-        paragraphs = soup.find_all("p", class_="Normal")
-        content = " ".join([p.get_text(strip=True) for p in paragraphs])
-        
-        if len(content) < 300: return None
 
-        tags_elements = soup.find_all("h4", class_="item-tag")
-        raw_tags = [t.get_text(strip=True).lower() for t in tags_elements]
-        full_text_lower = (title + " " + content).lower()
+        res = requests.get(
+            url,
+            headers=headers,
+            timeout=10
+        )
 
-        # TẠO NHÃN DẠNG LIST
-        final_labels = set()
-        final_labels.add(default_label)
+        soup = BeautifulSoup(
+            res.text,
+            "html.parser"
+        )
 
-        for topic, keywords in TOPIC_MAPPING.items():
-            for word in keywords:
-                if word in raw_tags or word in full_text_lower:
-                    final_labels.add(topic)
-                    break 
-        
+        domain = urlparse(url).netloc
+
+        parser_function = None
+
+        for site, parser in SITE_PARSERS.items():
+
+            if site in domain:
+
+                parser_function = parser
+
+                break
+
+        if parser_function is None:
+
+            return None
+
+        title, content = parser_function(soup)
+
+        if len(content) < 300:
+
+            return None
+
+        text_hash = create_hash(
+            title + content
+        )
+
+        # chống duplicate
+        if text_hash in visited_hashes:
+
+            return None
+
+        visited_hashes.add(text_hash)
+
         return {
+
             "title": title,
+
             "content": content,
-            "labels": list(final_labels), # Lưu dưới dạng List thực thụ
-            "url": url
+
+            "labels": [label],
+
+            "url": url,
+
+            "text_hash": text_hash
         }
-    except: return None
+
+    except Exception as e:
+
+        print(e)
+
+        return None
 
 # =========================================================
-# 4. CHƯƠNG TRÌNH CHÍNH
+# MAIN
 # =========================================================
 
-for cat_name, info in categories.items():
-    links = get_article_links(cat_name, info['url'], info['num_pages'])
+for label, urls in categories.items():
+
+    current_count = existing_label_counts[label]
+
+    print("\n======================")
+    print(f"LABEL: {label}")
+    print(f"HIỆN TẠI: {current_count}")
+    print("======================")
+
+    # skip label đủ rồi
+    if current_count >= TARGET_PER_LABEL:
+
+        print(f"SKIP {label}")
+
+        continue
+
+    all_links = []
+
+    # =========================================
+    # GET LINKS
+    # =========================================
+
+    for url in urls:
+
+        if "vnexpress.net" in url:
+
+            links = get_links_vnexpress(
+                url,
+                pages=40
+            )
+
+        elif "dantri.com.vn" in url:
+
+            links = get_links_dantri(
+                url,
+                pages=40
+            )
+
+        elif "tuoitre.vn" in url:
+
+            links = get_links_tuoitre(
+                url,
+                pages=40
+            )
+
+        elif "thanhnien.vn" in url:
+
+            links = get_links_thanhnien(
+                url,
+                pages=40
+            )
+
+        else:
+
+            continue
+
+        all_links.extend(links)
+
+    print(f"Tổng links: {len(all_links)}")
+
+    # =========================================
+    # CRAWL
+    # =========================================
+
     count = 0
-    for link in links:
-        data = crawl_and_label_article(link, cat_name)
-        if data:
-            all_data.append(data)
-            count += 1
-            if count % 10 == 0:
-                print(f"  > Đã cào: {count}/{len(links)} bài [{cat_name}]")
-        time.sleep(random.uniform(0.3, 0.5))
 
-# Lưu file kết quả
-if all_data:
-    df = pd.DataFrame(all_data)
-    
-    # Khi lưu CSV, List sẽ bị biến thành chuỗi dạng "[label1, label2]".
-    # Đây là định dạng chuẩn của Pandas khi lưu list vào CSV.
-    filename = "vnexpress_multilabel_list.csv"
-    df.to_csv(filename, index=False, encoding="utf-8-sig")
-    
-    # Ngoài ra, tôi khuyên bạn nên lưu thêm 1 bản JSON để giữ nguyên định dạng list xịn
-    df.to_json("vnexpress_multilabel_list.json", orient="records", force_ascii=False, indent=4)
-    
-    print(f"\n--- HOÀN THÀNH ---")
-    print(f"Tổng số bài: {len(df)}")
-    print(f"Đã lưu CSV và JSON với nhãn dạng list.")
+    for link in all_links:
+
+        # đủ label thì dừng
+        if existing_label_counts[label] >= TARGET_PER_LABEL:
+
+            print(f"Đã đủ dữ liệu cho {label}")
+
+            break
+
+        data = crawl_article(
+            link,
+            label
+        )
+
+        if data:
+
+            all_data.append(data)
+
+            count += 1
+
+            existing_label_counts[label] += 1
+
+            if count % 10 == 0:
+
+                print(
+                    f"Đã crawl: {count} bài"
+                )
+
+        time.sleep(
+            random.uniform(0.3, 0.6)
+        )
+
+# =========================================================
+# SAVE DATASET
+# =========================================================
+
+if len(all_data) > 0:
+
+    new_df = pd.DataFrame(all_data)
+
+    if os.path.exists(DATASET_FILE):
+
+        old_df = pd.read_csv(DATASET_FILE)
+
+        final_df = pd.concat(
+            [old_df, new_df],
+            ignore_index=True
+        )
+
+    else:
+
+        final_df = new_df
+
+    # remove duplicate
+    final_df = final_df.drop_duplicates(
+        subset=["text_hash"]
+    )
+
+    final_df = final_df.drop_duplicates(
+        subset=["url"]
+    )
+
+    # save csv
+    final_df.to_csv(
+        DATASET_FILE,
+        index=False,
+        encoding="utf-8-sig"
+    )
+
+    # save json
+    final_df.to_json(
+        JSON_FILE,
+        orient="records",
+        force_ascii=False,
+        indent=4
+    )
+
+    print("\n======================")
+    print("HOÀN THÀNH")
+    print("======================")
+
+    print(f"Bài mới: {len(new_df)}")
+
+    print(f"Tổng dataset: {len(final_df)}")
+
+    print("\nLABEL DISTRIBUTION:")
+
+    sorted_labels = sorted(
+        existing_label_counts.items(),
+        key=lambda x: x[1],
+        reverse=True
+    )
+
+    for label, count in sorted_labels:
+
+        print(f"{label}: {count}")
+
+else:
+
+    print("\nKhông có dữ liệu mới.")
